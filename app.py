@@ -49,23 +49,28 @@ for country in COUNTRIES:
     if not reqs:
         continue
 
-    st.markdown(f"**{country} upload requirements**")
-    for req in reqs:
-        st.write(
-            f"- Sheet `{req['sheet']}` must include columns: `Date`, `{req['column']}`"
-        )
+    left_col, right_col = st.columns([3, 2])
+    with left_col:
+        st.markdown(f"**{country}**")
+        for req in reqs:
+            st.write(
+                f"Required sheet `{req['sheet']}` with columns `Date`, `{req['column']}`"
+            )
 
-    uploaded_file = st.file_uploader(
-        f"Upload {country} Excel file (.xlsx)",
-        type=["xlsx"],
-        key=f"upload_{country}"
-    )
-    if uploaded_file is not None:
-        try:
-            excel_providers[country] = ExcelProvider(uploaded_file)
-        except Exception as exc:
-            st.error(f"{country}: could not read uploaded Excel file: {exc}")
-            st.stop()
+    with right_col:
+        uploaded_file = st.file_uploader(
+            f"Browse {country} file",
+            type=["xlsx"],
+            key=f"upload_{country}"
+        )
+        if uploaded_file is not None:
+            try:
+                excel_providers[country] = ExcelProvider(uploaded_file)
+            except Exception as exc:
+                st.error(f"{country}: could not read uploaded Excel file: {exc}")
+                st.stop()
+
+st.divider()
 
 
 # ==============================
