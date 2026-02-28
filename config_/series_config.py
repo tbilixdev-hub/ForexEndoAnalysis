@@ -31,11 +31,17 @@ SERIES_CONFIG = {
             }
         },
         "inflation": {
-            "cpi": {
+            "core_cpi": {
                 "source": "fred",
-                "code": "CPIAUCSL",
+                "code": "CPILFESL",
                 "target": 2.0,
-                "weight": 1.0
+                "weight": 0.6
+            },
+            "core_ppi": {
+                "source": "fred",
+                "code": "PPIFID",
+                "target": 2.0,
+                "weight": 0.4
             }
         },
         "labor": {
