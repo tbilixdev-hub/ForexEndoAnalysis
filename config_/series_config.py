@@ -4,14 +4,28 @@ SERIES_CONFIG = {
     "USD": {
         "growth": {
             "pmi": {
-                "source": "excel",      # change to "fred" later if needed
+                "source": "excel",
                 "code": "US_PMI",
-                "weight": 0.5
+                "weight": 0.3,
+                "calc_type": "level_3m_change"
             },
-            "industrial_production": {
+            "nmi": {
+                "source": "excel",
+                "code": "US_NMI",
+                "weight": 0.2,
+                "calc_type": "level_3m_change"
+            },
+            "umcsent": {
                 "source": "fred",
-                "code": "INDPRO",
-                "weight": 0.5
+                "code": "UMCSENT",
+                "weight": 0.3,
+                "calc_type": "level_3m_change"
+            },
+            "permits": {
+                "source": "fred",
+                "code": "HOUST",
+                "weight": 0.2,
+                "calc_type": "permits_yoy_3m_change"
             }
         }
     },

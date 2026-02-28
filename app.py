@@ -78,7 +78,8 @@ with st.expander("Growth calculation details"):
                 if item["status"] == "used":
                     st.write(
                         f"  used: {item['indicator']} ({item['source']}), "
-                        f"weight={item['weight']}, z={item['latest_score']:.3f}"
+                        f"weight={item['weight']}, z={item['zscore']:.3f}, "
+                        f"score={item['score']:+.1f}, regime={item['regime']}"
                     )
                 else:
                     st.write(
