@@ -1,5 +1,24 @@
 import numpy as np
-from scipy.stats import skew, kurtosis
+
+try:
+    from scipy.stats import skew as _scipy_skew
+    from scipy.stats import kurtosis as _scipy_kurtosis
+except Exception:
+    _scipy_skew = None
+    _scipy_kurtosis = None
+
+
+def _calc_skew(series):
+    if _scipy_skew is not None:
+        return _scipy_skew(series)
+    return series.skew()
+
+
+def _calc_kurtosis_pearson(series):
+    if _scipy_kurtosis is not None:
+        return _scipy_kurtosis(series, fisher=False)
+    # pandas kurtosis is Fisher (normal == 0), convert to Pearson (normal == 3)
+    return series.kurt() + 3
 
 
 def expanding_zscore(series):
@@ -22,8 +41,8 @@ def smart_zscore(series):
     if len(s) < 24:
         return expanding_zscore(series)
 
-    s_skew = skew(s)
-    s_kurt = kurtosis(s, fisher=False)
+    s_skew = _calc_skew(s)
+    s_kurt = _calc_kurtosis_pearson(s)
 
     if abs(s_skew) > 0.5 or s_kurt > 4:
         z = expanding_robust_zscore(series)
