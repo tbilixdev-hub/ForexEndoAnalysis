@@ -2,6 +2,7 @@ from config import WEIGHTS
 from pillars.growth import GrowthPillar
 from pillars.inflation import InflationPillar
 from pillars.labor import LaborPillar
+from pillars.monetary import MonetaryPillar
 
 
 class CountryModel:
@@ -21,17 +22,20 @@ class CountryModel:
         inflation = inflation_pillar.run()
         labor_pillar = LaborPillar(self.country, self.provider)
         labor = labor_pillar.run()
+        monetary_pillar = MonetaryPillar(self.country, self.provider)
+        monetary = monetary_pillar.run()
 
         self.pillar_scores = {
             "growth": growth,
             "inflation": inflation,
             "labor": labor,
-            "monetary": 0,
+            "monetary": monetary,
             "fiscal": 0
         }
         self.details["growth"] = growth_pillar.details
         self.details["inflation"] = inflation_pillar.details
         self.details["labor"] = labor_pillar.details
+        self.details["monetary"] = monetary_pillar.details
 
     def aggregate(self):
         total = 0

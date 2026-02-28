@@ -54,6 +54,33 @@ SERIES_CONFIG = {
                 "code": "UNRATE",
                 "role": "unrate"
             }
+        },
+        "monetary": {
+            "fed_rate": {
+                "source": "fred",
+                "code": "FEDFUNDS",
+                "role": "fed_rate"
+            },
+            "cpi_core": {
+                "source": "fred",
+                "code": "CPILFESL",
+                "role": "cpi_core"
+            },
+            "fed_assets": {
+                "source": "fred",
+                "code": "WALCL",
+                "role": "fed_assets"
+            },
+            "gdp": {
+                "source": "fred",
+                "code": "GDP",
+                "role": "gdp"
+            },
+            "m2": {
+                "source": "fred",
+                "code": "M2SL",
+                "role": "m2"
+            }
         }
     },
 

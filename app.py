@@ -100,6 +100,7 @@ for country in COUNTRIES:
         "growth": model.pillar_scores["growth"],
         "inflation": model.pillar_scores["inflation"],
         "labor": model.pillar_scores["labor"],
+        "monetary": model.pillar_scores["monetary"],
     }
     details[country] = model.details
 
@@ -114,7 +115,7 @@ for country, vals in results.items():
     st.write(
         f"{country}: internal={vals['internal']:.2f} | "
         f"growth={vals['growth']:.2f} | inflation={vals['inflation']:.2f} | "
-        f"labor={vals['labor']:.2f}"
+        f"labor={vals['labor']:.2f} | monetary={vals['monetary']:.2f}"
     )
 
 with st.expander("Growth calculation details"):
@@ -172,3 +173,21 @@ with st.expander("Inflation calculation details"):
                         f"  skipped: {item['indicator']} ({item['source']}), "
                         f"reason={item['reason']}"
                     )
+
+with st.expander("Monetary calculation details"):
+    for country in COUNTRIES:
+        st.write(f"{country}")
+        monetary_details = details.get(country, {}).get("monetary", [])
+        if not monetary_details:
+            st.write("  No monetary indicators configured or all skipped.")
+        else:
+            for item in monetary_details:
+                if item["status"] == "used":
+                    st.write(
+                        f"  used: score={item['score']:+.3f}, regime={item['regime']}, "
+                        f"real_rate_z={item['real_rate_z']:.2f}, "
+                        f"balance_sheet_z={item['balance_sheet_z']:.2f}, "
+                        f"m2_z={item['m2_z']:.2f}"
+                    )
+                else:
+                    st.write(f"  skipped: reason={item['reason']}")
