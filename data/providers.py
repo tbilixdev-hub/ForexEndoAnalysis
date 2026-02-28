@@ -1,5 +1,6 @@
 import pandas as pd
 import requests
+import time
 
 
 FRED_API_URL = "https://api.stlouisfed.org/fred/series/observations"
@@ -18,9 +19,13 @@ class FREDProvider(DataProvider):
 
     def __init__(self, api_key):
         self.api_key = api_key
+        self._cache = {}
 
     def get_series(self, country, series_config):
         series_id = series_config["code"]
+
+        if series_id in self._cache:
+            return self._cache[series_id]
 
         params = {
             "series_id": series_id,
@@ -28,8 +33,35 @@ class FREDProvider(DataProvider):
             "file_type": "json",
         }
 
-        r = requests.get(FRED_API_URL, params=params, timeout=30)
-        r.raise_for_status()
+        max_attempts = 4
+        last_error = None
+        for attempt in range(max_attempts):
+            try:
+                r = requests.get(FRED_API_URL, params=params, timeout=30)
+                r.raise_for_status()
+                break
+            except requests.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else None
+                if status == 429 and attempt < max_attempts - 1:
+                    retry_after = exc.response.headers.get("Retry-After") if exc.response else None
+                    try:
+                        wait_seconds = float(retry_after) if retry_after is not None else (2 ** attempt)
+                    except ValueError:
+                        wait_seconds = float(2 ** attempt)
+                    time.sleep(wait_seconds)
+                    last_error = exc
+                    continue
+                raise
+            except Exception as exc:
+                last_error = exc
+                if attempt < max_attempts - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise
+        else:
+            if last_error is not None:
+                raise last_error
+            raise RuntimeError(f"Failed to fetch FRED series {series_id}")
 
         obs = r.json().get("observations", [])
         vals = [(o["date"], o["value"]) for o in obs if o["value"] != "."]
@@ -42,7 +74,9 @@ class FREDProvider(DataProvider):
             index=pd.to_datetime([d for d, _ in vals])
         )
 
-        return series.sort_index()
+        series = series.sort_index()
+        self._cache[series_id] = series
+        return series
 
 
 # ========================
