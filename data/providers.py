@@ -94,9 +94,10 @@ class ExcelProvider(DataProvider):
 
 class HybridProvider(DataProvider):
 
-    def __init__(self, fred_provider=None, excel_provider=None):
+    def __init__(self, fred_provider=None, excel_provider=None, excel_providers=None):
         self.fred = fred_provider
         self.excel = excel_provider
+        self.excel_providers = excel_providers or {}
 
     def get_series(self, country, series_config):
         source = series_config["source"]
@@ -105,9 +106,10 @@ class HybridProvider(DataProvider):
             return self.fred.get_series(country, series_config)
 
         elif source == "excel":
-            if self.excel is None:
-                raise ValueError("Excel provider not initialized")
-            return self.excel.get_series(country, series_config)
+            excel_provider = self.excel_providers.get(country, self.excel)
+            if excel_provider is None:
+                raise ValueError(f"Excel provider not initialized for {country}")
+            return excel_provider.get_series(country, series_config)
 
         else:
             raise ValueError("Unknown data source")

@@ -1,6 +1,7 @@
 import streamlit as st
 
 from config import COUNTRIES, FRED_API_KEY
+from config_.series_config import SERIES_CONFIG
 from data.providers import FREDProvider, ExcelProvider, HybridProvider
 from country.country_model import CountryModel
 
@@ -9,14 +10,62 @@ st.set_page_config(layout="wide")
 st.title("Macro Score Dashboard")
 
 
+def get_excel_requirements(country):
+    country_cfg = SERIES_CONFIG.get(country, {})
+    requirements = []
+    for pillar_cfg in country_cfg.values():
+        if not isinstance(pillar_cfg, dict):
+            continue
+        for indicator_name, indicator_cfg in pillar_cfg.items():
+            if indicator_cfg.get("source") != "excel":
+                continue
+            requirements.append({
+                "indicator": indicator_name,
+                "sheet": indicator_cfg.get("sheet", 0),
+                "column": indicator_cfg.get("column") or indicator_cfg.get("code", "<missing>"),
+            })
+    # Deduplicate by sheet+column to keep instruction clean.
+    seen = set()
+    deduped = []
+    for item in requirements:
+        key = (item["sheet"], item["column"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
 # ==============================
-# FILE UPLOAD (OPTIONAL)
+# FILE UPLOAD BY CURRENCY
 # ==============================
 
-uploaded_file = st.file_uploader(
-    "Upload Excel Data (if required)",
-    type=["xlsx"]
-)
+st.subheader("Upload Data Files by Currency")
+st.caption("Upload only the currencies that require Excel sources. USD currently needs one ISM file.")
+
+excel_providers = {}
+for country in COUNTRIES:
+    reqs = get_excel_requirements(country)
+    if not reqs:
+        continue
+
+    st.markdown(f"**{country} upload requirements**")
+    for req in reqs:
+        st.write(
+            f"- Sheet `{req['sheet']}` must include columns: `Date`, `{req['column']}`"
+        )
+
+    uploaded_file = st.file_uploader(
+        f"Upload {country} Excel file (.xlsx)",
+        type=["xlsx"],
+        key=f"upload_{country}"
+    )
+    if uploaded_file is not None:
+        try:
+            excel_providers[country] = ExcelProvider(uploaded_file)
+        except Exception as exc:
+            st.error(f"{country}: could not read uploaded Excel file: {exc}")
+            st.stop()
 
 
 # ==============================
@@ -25,17 +74,9 @@ uploaded_file = st.file_uploader(
 
 fred_provider = FREDProvider(FRED_API_KEY)
 
-excel_provider = None
-if uploaded_file is not None:
-    try:
-        excel_provider = ExcelProvider(uploaded_file)
-    except Exception as exc:
-        st.error(f"Could not read uploaded Excel file: {exc}")
-        st.stop()
-
 provider = HybridProvider(
     fred_provider=fred_provider,
-    excel_provider=excel_provider
+    excel_providers=excel_providers
 )
 
 
