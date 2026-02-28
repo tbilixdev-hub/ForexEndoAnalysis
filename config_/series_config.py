@@ -81,6 +81,33 @@ SERIES_CONFIG = {
                 "code": "M2SL",
                 "role": "m2"
             }
+        },
+        "fiscal": {
+            "debt_gdp": {
+                "source": "fred",
+                "code": "GFDEGDQ188S",
+                "role": "debt_gdp"
+            },
+            "deficit_gdp": {
+                "source": "fred",
+                "code": "FYFSGDA188S",
+                "role": "deficit_gdp"
+            },
+            "interest_gdp": {
+                "source": "fred",
+                "code": "A091RC1Q027SBEA",
+                "role": "interest_gdp"
+            },
+            "receipts": {
+                "source": "fred",
+                "code": "FYFRGDA188S",
+                "role": "receipts"
+            },
+            "yield10": {
+                "source": "fred",
+                "code": "DGS10",
+                "role": "yield10"
+            }
         }
     },
 

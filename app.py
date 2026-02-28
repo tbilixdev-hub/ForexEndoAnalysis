@@ -101,6 +101,7 @@ for country in COUNTRIES:
         "inflation": model.pillar_scores["inflation"],
         "labor": model.pillar_scores["labor"],
         "monetary": model.pillar_scores["monetary"],
+        "fiscal": model.pillar_scores["fiscal"],
     }
     details[country] = model.details
 
@@ -115,7 +116,8 @@ for country, vals in results.items():
     st.write(
         f"{country}: internal={vals['internal']:.2f} | "
         f"growth={vals['growth']:.2f} | inflation={vals['inflation']:.2f} | "
-        f"labor={vals['labor']:.2f} | monetary={vals['monetary']:.2f}"
+        f"labor={vals['labor']:.2f} | monetary={vals['monetary']:.2f} | "
+        f"fiscal={vals['fiscal']:.2f}"
     )
 
 with st.expander("Growth calculation details"):
@@ -188,6 +190,24 @@ with st.expander("Monetary calculation details"):
                         f"real_rate_z={item['real_rate_z']:.2f}, "
                         f"balance_sheet_z={item['balance_sheet_z']:.2f}, "
                         f"m2_z={item['m2_z']:.2f}"
+                    )
+                else:
+                    st.write(f"  skipped: reason={item['reason']}")
+
+with st.expander("Fiscal calculation details"):
+    for country in COUNTRIES:
+        st.write(f"{country}")
+        fiscal_details = details.get(country, {}).get("fiscal", [])
+        if not fiscal_details:
+            st.write("  No fiscal indicators configured or all skipped.")
+        else:
+            for item in fiscal_details:
+                if item["status"] == "used":
+                    st.write(
+                        f"  used: score={item['score']:+.3f}, regime={item['regime']}, "
+                        f"debt_z={item['debt_z']:.2f}, deficit_z={item['deficit_z']:.2f}, "
+                        f"interest_z={item['interest_z']:.2f}, liquidity_z={item['liquidity_z']:.2f}, "
+                        f"yield_z={item['yield_z']:.2f}"
                     )
                 else:
                     st.write(f"  skipped: reason={item['reason']}")
