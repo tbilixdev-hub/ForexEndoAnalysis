@@ -5,12 +5,14 @@ SERIES_CONFIG = {
         "growth": {
             "pmi": {
                 "source": "excel",
+                "sheet": "PMI",
                 "code": "US_PMI",
                 "weight": 0.3,
                 "calc_type": "level_3m_change"
             },
             "nmi": {
                 "source": "excel",
+                "sheet": "NMI",
                 "code": "US_NMI",
                 "weight": 0.2,
                 "calc_type": "level_3m_change"
