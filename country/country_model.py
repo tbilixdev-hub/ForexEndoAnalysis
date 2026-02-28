@@ -9,10 +9,12 @@ class CountryModel:
         self.provider = provider
         self.pillar_scores = {}
         self.internal_score = None
+        self.details = {}
 
     def compute_pillars(self):
 
-        growth = GrowthPillar(self.country, self.provider).run()
+        growth_pillar = GrowthPillar(self.country, self.provider)
+        growth = growth_pillar.run()
 
         self.pillar_scores = {
             "growth": growth,
@@ -21,6 +23,7 @@ class CountryModel:
             "monetary": 0,
             "fiscal": 0
         }
+        self.details["growth"] = growth_pillar.details
 
     def aggregate(self):
         total = 0

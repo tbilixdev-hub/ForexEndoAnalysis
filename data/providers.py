@@ -66,8 +66,13 @@ class ExcelProvider(DataProvider):
         if self.excel is None:
             raise ValueError("Excel provider not initialized")
 
-        sheet = series_config["sheet"]
-        column = series_config["column"]
+        sheet = series_config.get("sheet", 0)
+        column = series_config.get("column") or series_config.get("code")
+
+        if column is None:
+            raise ValueError(
+                "Excel series config must include 'column' (or 'code' as alias)."
+            )
 
         df = pd.read_excel(self.excel, sheet_name=sheet)
 
