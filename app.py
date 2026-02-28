@@ -99,6 +99,7 @@ for country in COUNTRIES:
         "internal": score,
         "growth": model.pillar_scores["growth"],
         "inflation": model.pillar_scores["inflation"],
+        "labor": model.pillar_scores["labor"],
     }
     details[country] = model.details
 
@@ -112,7 +113,8 @@ st.subheader("Internal Scores")
 for country, vals in results.items():
     st.write(
         f"{country}: internal={vals['internal']:.2f} | "
-        f"growth={vals['growth']:.2f} | inflation={vals['inflation']:.2f}"
+        f"growth={vals['growth']:.2f} | inflation={vals['inflation']:.2f} | "
+        f"labor={vals['labor']:.2f}"
     )
 
 with st.expander("Growth calculation details"):
@@ -134,6 +136,23 @@ with st.expander("Growth calculation details"):
                         f"  skipped: {item['indicator']} ({item['source']}), "
                         f"reason={item['reason']}"
                     )
+
+with st.expander("Labor calculation details"):
+    for country in COUNTRIES:
+        st.write(f"{country}")
+        labor_details = details.get(country, {}).get("labor", [])
+        if not labor_details:
+            st.write("  No labor indicators configured or all skipped.")
+        else:
+            for item in labor_details:
+                if item["status"] == "used":
+                    st.write(
+                        f"  used: score={item['score']:+.3f}, regime={item['regime']}, "
+                        f"nfp_z={item['nfp_z']:.2f}, ahe_z={item['ahe_z']:.2f}, "
+                        f"unrate_z={item['unrate_z']:.2f}"
+                    )
+                else:
+                    st.write(f"  skipped: reason={item['reason']}")
 
 with st.expander("Inflation calculation details"):
     for country in COUNTRIES:

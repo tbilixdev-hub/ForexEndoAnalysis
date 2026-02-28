@@ -37,6 +37,23 @@ SERIES_CONFIG = {
                 "target": 2.0,
                 "weight": 1.0
             }
+        },
+        "labor": {
+            "nfp": {
+                "source": "fred",
+                "code": "PAYEMS",
+                "role": "nfp"
+            },
+            "ahe": {
+                "source": "fred",
+                "code": "CES0500000003",
+                "role": "ahe"
+            },
+            "unrate": {
+                "source": "fred",
+                "code": "UNRATE",
+                "role": "unrate"
+            }
         }
     },
 
