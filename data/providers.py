@@ -53,7 +53,13 @@ class ExcelProvider(DataProvider):
 
     def __init__(self, file):
         self.file = file
-        self.excel = pd.ExcelFile(file) if file else None
+        try:
+            self.excel = pd.ExcelFile(file, engine="openpyxl") if file else None
+        except ImportError as exc:
+            raise RuntimeError(
+                "Excel upload requires the 'openpyxl' package. "
+                "Add openpyxl to deployment dependencies."
+            ) from exc
 
     def get_series(self, country, series_config):
 

@@ -27,7 +27,11 @@ fred_provider = FREDProvider(FRED_API_KEY)
 
 excel_provider = None
 if uploaded_file is not None:
-    excel_provider = ExcelProvider(uploaded_file)
+    try:
+        excel_provider = ExcelProvider(uploaded_file)
+    except Exception as exc:
+        st.error(f"Could not read uploaded Excel file: {exc}")
+        st.stop()
 
 provider = HybridProvider(
     fred_provider=fred_provider,
