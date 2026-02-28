@@ -1,52 +1,48 @@
 import numpy as np
-
-try:
-    from scipy.stats import skew as _scipy_skew
-    from scipy.stats import kurtosis as _scipy_kurtosis
-except Exception:
-    _scipy_skew = None
-    _scipy_kurtosis = None
+import pandas as pd
 
 
-def _calc_skew(series):
-    if _scipy_skew is not None:
-        return _scipy_skew(series)
-    return series.skew()
+def rolling_zscore(series, window=120):
+    rolling_mean = series.rolling(window).mean()
+    rolling_std = series.rolling(window).std()
+    z = (series - rolling_mean) / rolling_std
+    return z
 
 
-def _calc_kurtosis_pearson(series):
-    if _scipy_kurtosis is not None:
-        return _scipy_kurtosis(series, fisher=False)
-    # pandas kurtosis is Fisher (normal == 0), convert to Pearson (normal == 3)
-    return series.kurt() + 3
+def smooth_compress(z):
+    return np.tanh(z / 2)
 
 
-def expanding_zscore(series):
-    mean = series.expanding().mean()
-    std = series.expanding().std(ddof=0)
-    std = std.replace(0, np.nan)
-    return (series - mean) / std
+REGIME_LABELS = {
+    -2: "Strongly Bearish",
+    -1: "Bearish",
+    0: "Neutral",
+    1: "Bullish",
+    2: "Strongly Bullish",
+}
 
 
-def expanding_robust_zscore(series):
-    median = series.expanding().median()
-    mad = (series - median).abs().expanding().median()
-    mad = mad.replace(0, np.nan)
-    return (series - median) / (1.4826 * mad)
-
-
-def smart_zscore(series):
-
+def quantile_regime(series):
     s = series.dropna()
-    if len(s) < 24:
-        return expanding_zscore(series)
+    if s.empty:
+        return series.apply(lambda x: np.nan)
+    q20 = s.quantile(0.2)
+    q40 = s.quantile(0.4)
+    q60 = s.quantile(0.6)
+    q80 = s.quantile(0.8)
 
-    s_skew = _calc_skew(s)
-    s_kurt = _calc_kurtosis_pearson(s)
+    def map_value(x):
+        if pd.isna(x):
+            return np.nan
+        if x <= q20:
+            return -2
+        elif x <= q40:
+            return -1
+        elif x <= q60:
+            return 0
+        elif x <= q80:
+            return 1
+        else:
+            return 2
 
-    if abs(s_skew) > 0.5 or s_kurt > 4:
-        z = expanding_robust_zscore(series)
-    else:
-        z = expanding_zscore(series)
-
-    return z.clip(-3, 3) / 3
+    return series.apply(map_value)

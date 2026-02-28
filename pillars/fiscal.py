@@ -2,51 +2,7 @@ import numpy as np
 import pandas as pd
 
 from config_.series_config import SERIES_CONFIG
-
-try:
-    from scipy.stats import skew as _scipy_skew
-    from scipy.stats import kurtosis as _scipy_kurtosis
-except Exception:
-    _scipy_skew = None
-    _scipy_kurtosis = None
-
-
-def _calc_skew(values):
-    if _scipy_skew is not None:
-        return float(_scipy_skew(values))
-    return float(pd.Series(values).skew())
-
-
-def _calc_kurtosis_pearson(values):
-    if _scipy_kurtosis is not None:
-        return float(_scipy_kurtosis(values, fisher=False))
-    return float(pd.Series(values).kurt() + 3)
-
-
-def _expanding_zscore(series):
-    mean = series.expanding().mean()
-    std = series.expanding().std(ddof=0)
-    std = std.replace(0, np.nan)
-    return (series - mean) / std
-
-
-def _expanding_robust_zscore(series):
-    med = series.expanding().median()
-    mad = (series - med).abs().expanding().median()
-    mad = mad.replace(0, np.nan)
-    return (series - med) / (1.4826 * mad)
-
-
-def _smart_zscore_raw(series):
-    s = series.dropna()
-    if len(s) < 24:
-        return _expanding_zscore(series)
-
-    s_skew = _calc_skew(s)
-    s_kurt = _calc_kurtosis_pearson(s)
-    if abs(s_skew) > 0.5 or abs(s_kurt) > 4:
-        return _expanding_robust_zscore(series)
-    return _expanding_zscore(series)
+from core.standardization import rolling_zscore, smooth_compress, quantile_regime, REGIME_LABELS
 
 
 class FiscalPillar:
@@ -54,108 +10,110 @@ class FiscalPillar:
     def __init__(self, country, provider):
         self.country = country
         self.provider = provider
-        self.score = 0
+        self.score = 0.0
+        self.score_series = pd.Series(dtype=float)
         self.details = []
-
-    @staticmethod
-    def _map_regime(score):
-        if score > 0.5:
-            return "Strong Fiscal Position"
-        if score > 0:
-            return "Stable Fiscal"
-        if score > -0.5:
-            return "Deteriorating"
-        return "Fiscal Stress"
 
     def run(self):
         country_config = SERIES_CONFIG.get(self.country, {})
         fiscal_config = country_config.get("fiscal", {})
 
         if not fiscal_config:
-            return 0
+            return float("nan")
 
         role_to_indicator = {}
         for name, cfg in fiscal_config.items():
             role_to_indicator[cfg.get("role", name)] = (name, cfg)
 
-        required_roles = ["debt_gdp", "deficit_gdp", "interest_gdp", "receipts", "yield10"]
-        missing_roles = [r for r in required_roles if r not in role_to_indicator]
-        if missing_roles:
+        component_weights = {
+            "debt_gdp": 0.25,
+            "deficit_gdp": 0.20,
+            "interest_gdp": 0.20,
+            "liquidity": 0.20,
+            "yield10": 0.15,
+        }
+        components = {}
+
+        for role in ["debt_gdp", "deficit_gdp", "interest_gdp"]:
+            if role not in role_to_indicator:
+                continue
+            try:
+                _, cfg = role_to_indicator[role]
+                raw = self.provider.get_series(self.country, cfg).resample("ME").ffill().dropna()
+                components[role] = -rolling_zscore(raw)
+            except Exception:
+                pass
+
+        if "yield10" in role_to_indicator:
+            try:
+                _, cfg = role_to_indicator["yield10"]
+                raw = self.provider.get_series(self.country, cfg).resample("ME").last()
+                yield_6m_change = raw.diff(6).dropna()
+                components["yield10"] = -rolling_zscore(yield_6m_change)
+            except Exception:
+                pass
+
+        receipts_series = None
+        if "receipts" in role_to_indicator:
+            try:
+                _, receipts_cfg = role_to_indicator["receipts"]
+                receipts_series = self.provider.get_series(self.country, receipts_cfg).resample("ME").ffill()
+            except Exception:
+                pass
+
+        if receipts_series is not None and "interest_gdp" in role_to_indicator:
+            try:
+                _, interest_cfg = role_to_indicator["interest_gdp"]
+                interest_series = self.provider.get_series(self.country, interest_cfg).resample("ME").ffill()
+                liquidity_cover = (receipts_series / interest_series).dropna()
+                components["liquidity"] = rolling_zscore(liquidity_cover)
+            except Exception:
+                pass
+
+        if len(components) < 2:
             self.details.append({
                 "status": "skipped",
-                "reason": f"Missing fiscal roles in config: {', '.join(missing_roles)}",
+                "reason": f"Fewer than 2 fiscal components available: {list(components.keys())}",
             })
-            return 0
+            return float("nan")
 
-        try:
-            debt_name, debt_cfg = role_to_indicator["debt_gdp"]
-            deficit_name, deficit_cfg = role_to_indicator["deficit_gdp"]
-            interest_name, interest_cfg = role_to_indicator["interest_gdp"]
-            receipts_name, receipts_cfg = role_to_indicator["receipts"]
-            yield_name, yield_cfg = role_to_indicator["yield10"]
+        component_df = pd.concat(components, axis=1).dropna()
+        if component_df.empty:
+            self.details.append({"status": "skipped", "reason": "No overlapping fiscal observations"})
+            return float("nan")
 
-            debt_gdp = self.provider.get_series(self.country, debt_cfg).resample("ME").ffill()
-            deficit_gdp = self.provider.get_series(self.country, deficit_cfg).resample("ME").ffill()
-            interest_gdp = self.provider.get_series(self.country, interest_cfg).resample("ME").ffill()
-            receipts = self.provider.get_series(self.country, receipts_cfg).resample("ME").ffill()
-            yield10 = self.provider.get_series(self.country, yield_cfg)
+        avail = list(component_df.columns)
+        total_w = sum(component_weights.get(c, 0) for c in avail)
+        if total_w == 0:
+            return float("nan")
+        fiscal_raw = sum(
+            (component_weights.get(c, 0) / total_w) * component_df[c]
+            for c in avail
+        )
+        fiscal_score_series = smooth_compress(fiscal_raw)
+        self.score_series = fiscal_score_series.dropna()
 
-            debt_z = -_smart_zscore_raw(debt_gdp)
-            deficit_z = -_smart_zscore_raw(deficit_gdp)
-            interest_z = -_smart_zscore_raw(interest_gdp)
-            liquidity_cover = receipts / interest_gdp
-            liquidity_z = _smart_zscore_raw(liquidity_cover)
-            yield_6m_change = yield10.resample("ME").last().diff(6)
-            yield_z = -_smart_zscore_raw(yield_6m_change)
+        if self.score_series.empty:
+            return float("nan")
 
-            df = pd.concat(
-                [debt_z, deficit_z, interest_z, liquidity_z, yield_z],
-                axis=1,
-                sort=False,
-            )
-            df.columns = ["debt_z", "deficit_z", "interest_z", "liquidity_z", "yield_z"]
-            df = df.dropna(how="all")
-            if df.empty:
-                raise ValueError("Fiscal pillar produced no aligned observations")
+        self.score = float(self.score_series.iloc[-1])
+        regime_series = quantile_regime(self.score_series)
+        rv = regime_series.dropna()
+        current_regime = rv.iloc[-1] if not rv.empty else 0
+        regime_label = REGIME_LABELS.get(
+            int(current_regime) if not pd.isna(current_regime) else 0, "Neutral"
+        )
 
-            component_cols = ["debt_z", "deficit_z", "interest_z", "liquidity_z", "yield_z"]
-            df_complete = df.dropna(subset=component_cols).copy()
-            if df_complete.empty:
-                raise ValueError("No complete fiscal observation available")
+        last = component_df.iloc[-1]
+        self.details.append({
+            "status": "used",
+            "score": self.score,
+            "regime": regime_label,
+            "debt_z": float(last["debt_gdp"]) if "debt_gdp" in last.index else float("nan"),
+            "deficit_z": float(last["deficit_gdp"]) if "deficit_gdp" in last.index else float("nan"),
+            "interest_z": float(last["interest_gdp"]) if "interest_gdp" in last.index else float("nan"),
+            "liquidity_z": float(last["liquidity"]) if "liquidity" in last.index else float("nan"),
+            "yield_z": float(last["yield10"]) if "yield10" in last.index else float("nan"),
+        })
 
-            df_complete["fiscal_raw"] = (
-                0.25 * df_complete["debt_z"] +
-                0.20 * df_complete["deficit_z"] +
-                0.20 * df_complete["interest_z"] +
-                0.20 * df_complete["liquidity_z"] +
-                0.15 * df_complete["yield_z"]
-            ).clip(-3, 3)
-            df_complete["fiscal_score"] = df_complete["fiscal_raw"] / 3
-
-            last = df_complete.iloc[-1]
-            self.score = float(last["fiscal_score"])
-            regime = self._map_regime(self.score)
-
-            self.details.append({
-                "status": "used",
-                "score": self.score,
-                "regime": regime,
-                "debt_indicator": debt_name,
-                "deficit_indicator": deficit_name,
-                "interest_indicator": interest_name,
-                "receipts_indicator": receipts_name,
-                "yield_indicator": yield_name,
-                "debt_z": float(last["debt_z"]),
-                "deficit_z": float(last["deficit_z"]),
-                "interest_z": float(last["interest_z"]),
-                "liquidity_z": float(last["liquidity_z"]),
-                "yield_z": float(last["yield_z"]),
-                "fiscal_raw": float(last["fiscal_raw"]),
-            })
-            return self.score
-        except Exception as exc:
-            self.details.append({
-                "status": "skipped",
-                "reason": str(exc),
-            })
-            return 0
+        return self.score

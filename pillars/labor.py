@@ -2,51 +2,7 @@ import numpy as np
 import pandas as pd
 
 from config_.series_config import SERIES_CONFIG
-
-try:
-    from scipy.stats import skew as _scipy_skew
-    from scipy.stats import kurtosis as _scipy_kurtosis
-except Exception:
-    _scipy_skew = None
-    _scipy_kurtosis = None
-
-
-def _calc_skew(values):
-    if _scipy_skew is not None:
-        return float(_scipy_skew(values))
-    return float(pd.Series(values).skew())
-
-
-def _calc_kurtosis_pearson(values):
-    if _scipy_kurtosis is not None:
-        return float(_scipy_kurtosis(values, fisher=False))
-    return float(pd.Series(values).kurt() + 3)
-
-
-def _expanding_zscore(series):
-    mean = series.expanding().mean()
-    std = series.expanding().std(ddof=0)
-    std = std.replace(0, np.nan)
-    return (series - mean) / std
-
-
-def _expanding_robust_zscore(series):
-    med = series.expanding().median()
-    mad = (series - med).abs().expanding().median()
-    mad = mad.replace(0, np.nan)
-    return (series - med) / (1.4826 * mad)
-
-
-def _smart_zscore_raw(series):
-    s = series.dropna()
-    if len(s) < 24:
-        return _expanding_zscore(series)
-
-    s_skew = _calc_skew(s)
-    s_kurt = _calc_kurtosis_pearson(s)
-    if abs(s_skew) > 0.5 or abs(s_kurt) > 4:
-        return _expanding_robust_zscore(series)
-    return _expanding_zscore(series)
+from core.standardization import rolling_zscore, smooth_compress, quantile_regime, REGIME_LABELS
 
 
 class LaborPillar:
@@ -54,105 +10,89 @@ class LaborPillar:
     def __init__(self, country, provider):
         self.country = country
         self.provider = provider
-        self.score = 0
+        self.score = 0.0
+        self.score_series = pd.Series(dtype=float)
         self.details = []
-
-    @staticmethod
-    def _map_labor_regime(score):
-        if score <= -0.7:
-            return "Deep Recessionary Labor"
-        if score <= -0.4:
-            return "Deteriorating Labor"
-        if score <= -0.15:
-            return "Softening Labor"
-        if score < 0.15:
-            return "Neutral Labor"
-        if score < 0.4:
-            return "Healthy Expansion"
-        if score < 0.7:
-            return "Tight Labor Market"
-        return "Overheating Labor Market"
 
     def run(self):
         country_config = SERIES_CONFIG.get(self.country, {})
         labor_config = country_config.get("labor", {})
 
         if not labor_config:
-            return 0
+            return float("nan")
 
         role_to_indicator = {}
         for name, cfg in labor_config.items():
             role_to_indicator[cfg.get("role", name)] = (name, cfg)
 
-        required_roles = ["nfp", "ahe", "unrate"]
-        missing_roles = [r for r in required_roles if r not in role_to_indicator]
-        if missing_roles:
+        base_weights = {"nfp": 0.4, "ahe": 0.3, "unrate": 0.3}
+        component_series = {}
+
+        for role in ["nfp", "ahe", "unrate"]:
+            if role not in role_to_indicator:
+                continue
+            name, cfg = role_to_indicator[role]
+            try:
+                s = self.provider.get_series(self.country, cfg).dropna().astype(float)
+
+                if role == "nfp":
+                    derived = s.diff().rolling(3).mean()
+                elif role == "ahe":
+                    ahe_yoy = s.pct_change(12) * 100
+                    ahe_3m_ann = ((s / s.shift(3)) ** 4 - 1) * 100
+                    derived = 0.6 * ahe_yoy + 0.4 * ahe_3m_ann
+                else:
+                    unrate_6m_change = s.diff(6)
+                    derived = 0.6 * (-s) + 0.4 * (-unrate_6m_change)
+
+                component_series[role] = rolling_zscore(derived.dropna())
+
+            except Exception as exc:
+                self.details.append({
+                    "status": "skipped",
+                    "reason": f"Failed {role} ({name}): {exc}",
+                })
+
+        if len(component_series) < 2:
             self.details.append({
                 "status": "skipped",
-                "reason": f"Missing labor roles in config: {', '.join(missing_roles)}",
+                "reason": f"Fewer than 2 labor components available: {list(component_series.keys())}",
             })
-            return 0
+            return float("nan")
 
-        try:
-            nfp_name, nfp_cfg = role_to_indicator["nfp"]
-            ahe_name, ahe_cfg = role_to_indicator["ahe"]
-            unrate_name, unrate_cfg = role_to_indicator["unrate"]
+        df = pd.concat(component_series, axis=1).dropna()
+        if df.empty:
+            self.details.append({"status": "skipped", "reason": "No overlapping labor observations"})
+            return float("nan")
 
-            nfp = self.provider.get_series(self.country, nfp_cfg)
-            ahe = self.provider.get_series(self.country, ahe_cfg)
-            unrate = self.provider.get_series(self.country, unrate_cfg)
+        avail = list(df.columns)
+        total_w = sum(base_weights[r] for r in avail if r in base_weights)
+        labor_raw = sum(
+            (base_weights[r] / total_w) * df[r]
+            for r in avail if r in base_weights
+        )
+        labor_score_series = smooth_compress(labor_raw)
+        self.score_series = labor_score_series.dropna()
 
-            nfp_change = nfp.diff()
-            nfp_3m_avg = nfp_change.rolling(3).mean()
-            nfp_z = _smart_zscore_raw(nfp_3m_avg)
+        if self.score_series.empty:
+            return float("nan")
 
-            ahe_yoy = ahe.pct_change(12) * 100
-            ahe_3m_ann = ((ahe / ahe.shift(3)) ** 4 - 1) * 100
-            ahe_combined = 0.6 * ahe_yoy + 0.4 * ahe_3m_ann
-            ahe_z = _smart_zscore_raw(ahe_combined)
+        self.score = float(self.score_series.iloc[-1])
+        regime_series = quantile_regime(self.score_series)
+        rv = regime_series.dropna()
+        current_regime = rv.iloc[-1] if not rv.empty else 0
+        regime_label = REGIME_LABELS.get(
+            int(current_regime) if not pd.isna(current_regime) else 0, "Neutral"
+        )
 
-            unrate_6m_change = unrate.diff(6)
-            unrate_level_inv = -unrate
-            unrate_change_inv = -unrate_6m_change
-            unrate_combined = 0.6 * unrate_level_inv + 0.4 * unrate_change_inv
-            unrate_z = _smart_zscore_raw(unrate_combined)
+        last = df.iloc[-1]
+        self.details.append({
+            "status": "used",
+            "score": self.score,
+            "regime": regime_label,
+            "nfp_z": float(last["nfp"]) if "nfp" in last.index else float("nan"),
+            "ahe_z": float(last["ahe"]) if "ahe" in last.index else float("nan"),
+            "unrate_z": float(last["unrate"]) if "unrate" in last.index else float("nan"),
+        })
 
-            df = pd.DataFrame({
-                "nfp_z": nfp_z,
-                "ahe_z": ahe_z,
-                "unrate_z": unrate_z,
-            }).dropna()
-
-            if df.empty:
-                raise ValueError("No valid values after labor block combination")
-
-            df["labor_raw"] = (
-                0.4 * df["nfp_z"] +
-                0.3 * df["ahe_z"] +
-                0.3 * df["unrate_z"]
-            ).clip(-3, 3)
-            df["labor_score"] = df["labor_raw"] / 3
-
-            last = df.iloc[-1]
-            self.score = float(last["labor_score"])
-            regime = self._map_labor_regime(self.score)
-
-            self.details.append({
-                "status": "used",
-                "score": self.score,
-                "regime": regime,
-                "nfp_indicator": nfp_name,
-                "ahe_indicator": ahe_name,
-                "unrate_indicator": unrate_name,
-                "nfp_z": float(last["nfp_z"]),
-                "ahe_z": float(last["ahe_z"]),
-                "unrate_z": float(last["unrate_z"]),
-                "labor_raw": float(last["labor_raw"]),
-            })
-            return self.score
-        except Exception as exc:
-            self.details.append({
-                "status": "skipped",
-                "reason": str(exc),
-            })
-            return 0
+        return self.score

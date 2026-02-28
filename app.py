@@ -1,4 +1,5 @@
 import streamlit as st
+import numpy as np
 
 from config import COUNTRIES, FRED_API_KEY
 from config_.series_config import SERIES_CONFIG
@@ -8,6 +9,12 @@ from country.country_model import CountryModel
 
 st.set_page_config(layout="wide")
 st.title("Macro Score Dashboard")
+
+
+def _fmt(v, spec=".2f"):
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return "N/A"
+    return format(v, spec)
 
 
 def get_excel_requirements(country):
@@ -91,6 +98,7 @@ provider = HybridProvider(
 
 results = {}
 details = {}
+models = {}
 
 for country in COUNTRIES:
     model = CountryModel(country, provider)
@@ -104,6 +112,7 @@ for country in COUNTRIES:
         "fiscal": model.pillar_scores["fiscal"],
     }
     details[country] = model.details
+    models[country] = model
 
 
 # ==============================
@@ -114,15 +123,19 @@ st.subheader("Internal Scores")
 
 for country, vals in results.items():
     st.write(
-        f"{country}: internal={vals['internal']:.2f} | "
-        f"growth={vals['growth']:.2f} | inflation={vals['inflation']:.2f} | "
-        f"labor={vals['labor']:.2f} | monetary={vals['monetary']:.2f} | "
-        f"fiscal={vals['fiscal']:.2f}"
+        f"{country}: internal={_fmt(vals['internal'])} | "
+        f"growth={_fmt(vals['growth'])} | inflation={_fmt(vals['inflation'])} | "
+        f"labor={_fmt(vals['labor'])} | monetary={_fmt(vals['monetary'])} | "
+        f"fiscal={_fmt(vals['fiscal'])}"
     )
 
 with st.expander("Growth calculation details"):
     for country in COUNTRIES:
         st.write(f"{country}")
+        gl = details.get(country, {}).get("growth_level")
+        gm = details.get(country, {}).get("growth_momentum")
+        if gl is not None:
+            st.write(f"  Growth Level: {_fmt(gl, '+.3f')} | Growth Momentum: {_fmt(gm, '+.3f')}")
         growth_details = details.get(country, {}).get("growth", [])
         if not growth_details:
             st.write("  No growth indicators configured or all skipped.")
@@ -131,8 +144,8 @@ with st.expander("Growth calculation details"):
                 if item["status"] == "used":
                     st.write(
                         f"  used: {item['indicator']} ({item['source']}), "
-                        f"weight={item['weight']}, z={item['zscore']:.3f}, "
-                        f"score={item['score']:+.1f}, regime={item['regime']}"
+                        f"weight={item['weight']}, score={_fmt(item.get('score'), '+.3f')}, "
+                        f"regime={item.get('regime', 'N/A')}"
                     )
                 else:
                     st.write(
@@ -150,9 +163,10 @@ with st.expander("Labor calculation details"):
             for item in labor_details:
                 if item["status"] == "used":
                     st.write(
-                        f"  used: score={item['score']:+.3f}, regime={item['regime']}, "
-                        f"nfp_z={item['nfp_z']:.2f}, ahe_z={item['ahe_z']:.2f}, "
-                        f"unrate_z={item['unrate_z']:.2f}"
+                        f"  used: score={_fmt(item['score'], '+.3f')}, regime={item['regime']}, "
+                        f"nfp_z={_fmt(item.get('nfp_z'), '.2f')}, "
+                        f"ahe_z={_fmt(item.get('ahe_z'), '.2f')}, "
+                        f"unrate_z={_fmt(item.get('unrate_z'), '.2f')}"
                     )
                 else:
                     st.write(f"  skipped: reason={item['reason']}")
@@ -168,7 +182,11 @@ with st.expander("Inflation calculation details"):
                 if item["status"] == "used":
                     st.write(
                         f"  used: {item['indicator']} ({item['source']}), "
-                        f"target={item['target']}, score={item['score']:+.3f}"
+                        f"weight={item['weight']}, target={item['target']}, "
+                        f"yoy={_fmt(item.get('yoy'), '.2f')}%, "
+                        f"m3_ann={_fmt(item.get('m3_ann'), '.2f')}%, "
+                        f"score={_fmt(item.get('score'), '+.3f')}, "
+                        f"regime={item.get('regime', 'N/A')}"
                     )
                 else:
                     st.write(
@@ -186,10 +204,10 @@ with st.expander("Monetary calculation details"):
             for item in monetary_details:
                 if item["status"] == "used":
                     st.write(
-                        f"  used: score={item['score']:+.3f}, regime={item['regime']}, "
-                        f"real_rate_z={item['real_rate_z']:.2f}, "
-                        f"balance_sheet_z={item['balance_sheet_z']:.2f}, "
-                        f"m2_z={item['m2_z']:.2f}"
+                        f"  used: score={_fmt(item['score'], '+.3f')}, regime={item['regime']}, "
+                        f"real_rate_z={_fmt(item.get('real_rate_z'), '.2f')}, "
+                        f"balance_sheet_z={_fmt(item.get('balance_sheet_z'), '.2f')}, "
+                        f"m2_z={_fmt(item.get('m2_z'), '.2f')}"
                     )
                 else:
                     st.write(f"  skipped: reason={item['reason']}")
@@ -204,10 +222,30 @@ with st.expander("Fiscal calculation details"):
             for item in fiscal_details:
                 if item["status"] == "used":
                     st.write(
-                        f"  used: score={item['score']:+.3f}, regime={item['regime']}, "
-                        f"debt_z={item['debt_z']:.2f}, deficit_z={item['deficit_z']:.2f}, "
-                        f"interest_z={item['interest_z']:.2f}, liquidity_z={item['liquidity_z']:.2f}, "
-                        f"yield_z={item['yield_z']:.2f}"
+                        f"  used: score={_fmt(item['score'], '+.3f')}, regime={item['regime']}, "
+                        f"debt_z={_fmt(item.get('debt_z'), '.2f')}, "
+                        f"deficit_z={_fmt(item.get('deficit_z'), '.2f')}, "
+                        f"interest_z={_fmt(item.get('interest_z'), '.2f')}, "
+                        f"liquidity_z={_fmt(item.get('liquidity_z'), '.2f')}, "
+                        f"yield_z={_fmt(item.get('yield_z'), '.2f')}"
                     )
                 else:
                     st.write(f"  skipped: reason={item['reason']}")
+
+with st.expander("Pillar Correlation Matrices"):
+    for country in COUNTRIES:
+        corr = models[country].correlation_matrix
+        if corr is not None:
+            st.write(f"**{country}**")
+            st.dataframe(corr.style.format("{:.2f}"))
+        else:
+            st.write(f"{country}: insufficient pillar data for correlation")
+
+with st.expander("Sensitivity Test (Weight ±0.1)"):
+    for country in COUNTRIES:
+        sens = models[country].sensitivity_results
+        if sens:
+            st.write(f"**{country}** (base composite = {_fmt(results[country]['internal'])})")
+            rows = [{"scenario": k, "score": _fmt(v)} for k, v in sens.items()]
+            import pandas as _pd
+            st.dataframe(_pd.DataFrame(rows).set_index("scenario"))

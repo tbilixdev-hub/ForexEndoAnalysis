@@ -2,13 +2,7 @@ import numpy as np
 import pandas as pd
 
 from config_.series_config import SERIES_CONFIG
-
-
-def _expanding_zscore(series):
-    mean = series.expanding().mean()
-    std = series.expanding().std(ddof=0)
-    std = std.replace(0, np.nan)
-    return (series - mean) / std
+from core.standardization import rolling_zscore, smooth_compress, quantile_regime, REGIME_LABELS
 
 
 class InflationPillar:
@@ -16,58 +10,47 @@ class InflationPillar:
     def __init__(self, country, provider):
         self.country = country
         self.provider = provider
-        self.score = 0
+        self.score = 0.0
+        self.score_series = pd.Series(dtype=float)
         self.details = []
-
-    @staticmethod
-    def _inflation_block(series, target=None):
-        yoy = series.pct_change(12) * 100
-        m3_ann = ((series / series.shift(3)) ** 4 - 1) * 100
-        accel = yoy.diff(3)
-
-        df = pd.DataFrame({
-            "yoy": yoy,
-            "m3_ann": m3_ann,
-            "accel": accel,
-        }).dropna()
-
-        if target is not None:
-            df["yoy"] = df["yoy"] - target
-
-        df["z_yoy"] = _expanding_zscore(df["yoy"])
-        df["z_m3"] = _expanding_zscore(df["m3_ann"])
-        df["z_accel"] = _expanding_zscore(df["accel"])
-
-        df["block_score_raw"] = (
-            0.4 * df["z_yoy"] +
-            0.4 * df["z_m3"] +
-            0.2 * df["z_accel"]
-        ).clip(-3, 3)
-        df["block_score"] = df["block_score_raw"] / 3
-        return df
 
     def run(self):
         country_config = SERIES_CONFIG.get(self.country, {})
         inflation_config = country_config.get("inflation", {})
 
         if not inflation_config:
-            return 0
+            return 0.0
 
-        weighted_scores = []
-        total_weight = 0
+        raw_series_list = []
+        weight_list = []
 
         for name, indicator in inflation_config.items():
             source = indicator.get("source", "unknown")
             weight = indicator.get("weight", 1.0)
-            target = indicator.get("target")
+            target = indicator.get("target", 2.0)
 
             try:
                 series = self.provider.get_series(self.country, indicator)
-                block_df = self._inflation_block(series, target=target)
-                if block_df.empty or block_df["block_score"].dropna().empty:
-                    raise ValueError("No valid inflation block score values")
-                latest = block_df.dropna().iloc[-1]
-                indicator_score = float(latest["block_score"])
+                s = series.dropna().astype(float)
+
+                yoy = s.pct_change(12) * 100
+                m3_ann = ((s / s.shift(3)) ** 4 - 1) * 100
+
+                inflation_level = yoy - target
+                inflation_momentum = m3_ann
+                inflation_raw = (0.5 * inflation_level + 0.5 * inflation_momentum).dropna()
+
+                raw_series_list.append((inflation_raw.rename(name), weight))
+                self.details.append({
+                    "indicator": name,
+                    "source": source,
+                    "weight": weight,
+                    "status": "used",
+                    "target": target,
+                    "yoy": float(yoy.dropna().iloc[-1]) if not yoy.dropna().empty else None,
+                    "m3_ann": float(m3_ann.dropna().iloc[-1]) if not m3_ann.dropna().empty else None,
+                })
+
             except Exception as exc:
                 self.details.append({
                     "indicator": name,
@@ -76,28 +59,33 @@ class InflationPillar:
                     "status": "skipped",
                     "reason": str(exc),
                 })
-                continue
 
-            weighted_scores.append(indicator_score * weight)
-            total_weight += weight
-            self.details.append({
-                "indicator": name,
-                "source": source,
-                "weight": weight,
-                "status": "used",
-                "target": target,
-                "yoy": float(latest["yoy"]),
-                "m3_ann": float(latest["m3_ann"]),
-                "accel": float(latest["accel"]),
-                "z_yoy": float(latest["z_yoy"]),
-                "z_m3": float(latest["z_m3"]),
-                "z_accel": float(latest["z_accel"]),
-                "score_raw": float(latest["block_score_raw"]),
-                "score": indicator_score,
-            })
+        if not raw_series_list:
+            return 0.0
 
-        if total_weight == 0:
-            return 0
+        total_weight = sum(w for _, w in raw_series_list)
+        combined_df = pd.concat([s for s, _ in raw_series_list], axis=1)
+        weights_norm = [w / total_weight for _, w in raw_series_list]
+        combined = combined_df.mul(weights_norm).sum(axis=1, min_count=1).dropna()
 
-        self.score = sum(weighted_scores) / total_weight
+        inflation_score_series = smooth_compress(rolling_zscore(combined)).dropna()
+        self.score_series = inflation_score_series
+
+        if inflation_score_series.empty:
+            self.score = 0.0
+            regime_label = "Neutral"
+        else:
+            self.score = float(inflation_score_series.iloc[-1])
+            regime_series = quantile_regime(inflation_score_series)
+            rv = regime_series.dropna()
+            current_regime = rv.iloc[-1] if not rv.empty else 0
+            regime_label = REGIME_LABELS.get(
+                int(current_regime) if not pd.isna(current_regime) else 0, "Neutral"
+            )
+
+        for d in self.details:
+            if d["status"] == "used":
+                d["score"] = self.score
+                d["regime"] = regime_label
+
         return self.score
