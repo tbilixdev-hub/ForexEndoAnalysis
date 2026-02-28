@@ -29,6 +29,14 @@ SERIES_CONFIG = {
                 "weight": 0.2,
                 "calc_type": "permits_yoy_3m_change"
             }
+        },
+        "inflation": {
+            "cpi": {
+                "source": "fred",
+                "code": "CPIAUCSL",
+                "target": 2.0,
+                "weight": 1.0
+            }
         }
     },
 

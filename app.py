@@ -97,7 +97,8 @@ for country in COUNTRIES:
     score = model.run()
     results[country] = {
         "internal": score,
-        "growth": model.pillar_scores["growth"]
+        "growth": model.pillar_scores["growth"],
+        "inflation": model.pillar_scores["inflation"],
     }
     details[country] = model.details
 
@@ -110,7 +111,8 @@ st.subheader("Internal Scores")
 
 for country, vals in results.items():
     st.write(
-        f"{country}: internal={vals['internal']:.2f} | growth={vals['growth']:.2f}"
+        f"{country}: internal={vals['internal']:.2f} | "
+        f"growth={vals['growth']:.2f} | inflation={vals['inflation']:.2f}"
     )
 
 with st.expander("Growth calculation details"):
@@ -126,6 +128,25 @@ with st.expander("Growth calculation details"):
                         f"  used: {item['indicator']} ({item['source']}), "
                         f"weight={item['weight']}, z={item['zscore']:.3f}, "
                         f"score={item['score']:+.1f}, regime={item['regime']}"
+                    )
+                else:
+                    st.write(
+                        f"  skipped: {item['indicator']} ({item['source']}), "
+                        f"reason={item['reason']}"
+                    )
+
+with st.expander("Inflation calculation details"):
+    for country in COUNTRIES:
+        st.write(f"{country}")
+        inflation_details = details.get(country, {}).get("inflation", [])
+        if not inflation_details:
+            st.write("  No inflation indicators configured or all skipped.")
+        else:
+            for item in inflation_details:
+                if item["status"] == "used":
+                    st.write(
+                        f"  used: {item['indicator']} ({item['source']}), "
+                        f"target={item['target']}, score={item['score']:+.3f}"
                     )
                 else:
                     st.write(
