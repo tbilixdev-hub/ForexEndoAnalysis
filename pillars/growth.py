@@ -2,17 +2,9 @@ import numpy as np
 import pandas as pd
 
 from config_.series_config import SERIES_CONFIG
-from core.standardization import rolling_zscore, smooth_compress, quantile_regime, REGIME_LABELS
-
-
-def _weighted_nanmean(df, weights):
-    weights_arr = np.array(weights, dtype=float)
-    values = df.values.astype(float)
-    mask = ~np.isnan(values)
-    weighted_sum = np.where(mask, values * weights_arr, 0.0).sum(axis=1)
-    weight_sum = (mask * weights_arr).sum(axis=1)
-    weight_sum = np.where(weight_sum == 0, np.nan, weight_sum)
-    return pd.Series(weighted_sum / weight_sum, index=df.index)
+from core.standardization import (
+    rolling_zscore, smooth_compress, quantile_regime, weighted_nanmean, REGIME_LABELS,
+)
 
 
 class GrowthPillar:
@@ -20,18 +12,18 @@ class GrowthPillar:
     def __init__(self, country, provider):
         self.country = country
         self.provider = provider
-        self.score = 0.0
+        self.score = float("nan")
         self.score_series = pd.Series(dtype=float)
         self.details = []
-        self.growth_level_score = 0.0
-        self.growth_momentum_score = 0.0
+        self.growth_level_score = float("nan")
+        self.growth_momentum_score = float("nan")
 
     def run(self):
         country_config = SERIES_CONFIG.get(self.country, {})
         growth_config = country_config.get("growth", {})
 
         if not growth_config:
-            return {"growth_level": 0.0, "growth_momentum": 0.0}
+            return {"growth_level": float("nan"), "growth_momentum": float("nan")}
 
         level_series_list = []
         momentum_series_list = []
@@ -54,8 +46,10 @@ class GrowthPillar:
                     level = s
                     momentum = s.diff(3)
 
-                level_series_list.append(level.rename(name))
-                momentum_series_list.append(momentum.rename(name))
+                # Standardize each indicator before combining: raw levels are on
+                # different scales (PMI ~50, sentiment ~70, permits YoY %).
+                level_series_list.append(rolling_zscore(level).rename(name))
+                momentum_series_list.append(rolling_zscore(momentum.dropna()).rename(name))
                 weights_used.append(weight)
 
                 self.details.append({
@@ -78,30 +72,24 @@ class GrowthPillar:
                 })
 
         if not level_series_list:
-            return {"growth_level": 0.0, "growth_momentum": 0.0}
+            return {"growth_level": float("nan"), "growth_momentum": float("nan")}
 
         level_df = pd.concat(level_series_list, axis=1)
         momentum_df = pd.concat(momentum_series_list, axis=1)
 
-        growth_level_composite = _weighted_nanmean(level_df, weights_used)
-        growth_momentum_composite = _weighted_nanmean(momentum_df, weights_used)
-
-        growth_level_z = smooth_compress(rolling_zscore(growth_level_composite))
-        growth_momentum_z = smooth_compress(rolling_zscore(growth_momentum_composite))
+        growth_level_z = smooth_compress(weighted_nanmean(level_df, weights_used))
+        growth_momentum_z = smooth_compress(weighted_nanmean(momentum_df, weights_used))
 
         score_series = (0.5 * growth_level_z + 0.5 * growth_momentum_z).dropna()
         self.score_series = score_series
 
         if score_series.empty:
-            self.growth_level_score = 0.0
-            self.growth_momentum_score = 0.0
-            self.score = 0.0
-            regime_label = "Neutral"
+            regime_label = "N/A"
         else:
             lv = growth_level_z.dropna()
             mv = growth_momentum_z.dropna()
-            self.growth_level_score = float(lv.iloc[-1]) if not lv.empty else 0.0
-            self.growth_momentum_score = float(mv.iloc[-1]) if not mv.empty else 0.0
+            self.growth_level_score = float(lv.iloc[-1]) if not lv.empty else float("nan")
+            self.growth_momentum_score = float(mv.iloc[-1]) if not mv.empty else float("nan")
             self.score = 0.5 * self.growth_level_score + 0.5 * self.growth_momentum_score
             regime_series = quantile_regime(score_series)
             rv = regime_series.dropna()

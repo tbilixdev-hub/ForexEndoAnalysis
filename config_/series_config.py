@@ -99,10 +99,15 @@ SERIES_CONFIG = {
                 "code": "FYFSGDA188S",
                 "role": "deficit_gdp"
             },
-            "interest_gdp": {
+            "interest": {
                 "source": "fred",
                 "code": "A091RC1Q027SBEA",
-                "role": "interest_gdp"
+                "role": "interest"
+            },
+            "gdp": {
+                "source": "fred",
+                "code": "GDP",
+                "role": "gdp"
             },
             "receipts": {
                 "source": "fred",

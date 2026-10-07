@@ -2,7 +2,9 @@ import numpy as np
 import pandas as pd
 
 from config_.series_config import SERIES_CONFIG
-from core.standardization import rolling_zscore, smooth_compress, quantile_regime, REGIME_LABELS
+from core.standardization import (
+    rolling_zscore, smooth_compress, quantile_regime, weighted_nanmean, REGIME_LABELS,
+)
 
 
 class InflationPillar:
@@ -10,7 +12,7 @@ class InflationPillar:
     def __init__(self, country, provider):
         self.country = country
         self.provider = provider
-        self.score = 0.0
+        self.score = float("nan")
         self.score_series = pd.Series(dtype=float)
         self.details = []
 
@@ -19,7 +21,7 @@ class InflationPillar:
         inflation_config = country_config.get("inflation", {})
 
         if not inflation_config:
-            return 0.0
+            return float("nan")
 
         raw_series_list = []
         weight_list = []
@@ -31,7 +33,7 @@ class InflationPillar:
 
             try:
                 series = self.provider.get_series(self.country, indicator)
-                s = series.dropna().astype(float)
+                s = series.dropna().astype(float).resample("ME").last()
 
                 yoy = s.pct_change(12) * 100
                 m3_ann = ((s / s.shift(3)) ** 4 - 1) * 100
@@ -61,19 +63,18 @@ class InflationPillar:
                 })
 
         if not raw_series_list:
-            return 0.0
+            return float("nan")
 
-        total_weight = sum(w for _, w in raw_series_list)
+        # Renormalize weights over the indicators available at each date, so the
+        # composite doesn't jump when a shorter series (e.g. PPI) starts.
         combined_df = pd.concat([s for s, _ in raw_series_list], axis=1)
-        weights_norm = [w / total_weight for _, w in raw_series_list]
-        combined = combined_df.mul(weights_norm).sum(axis=1, min_count=1).dropna()
+        combined = weighted_nanmean(combined_df, [w for _, w in raw_series_list]).dropna()
 
         inflation_score_series = smooth_compress(rolling_zscore(combined)).dropna()
         self.score_series = inflation_score_series
 
         if inflation_score_series.empty:
-            self.score = 0.0
-            regime_label = "Neutral"
+            regime_label = "N/A"
         else:
             self.score = float(inflation_score_series.iloc[-1])
             regime_series = quantile_regime(inflation_score_series)

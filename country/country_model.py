@@ -10,11 +10,18 @@ from pillars.fiscal import FiscalPillar
 
 
 def geometric_aggregate(pillars_dict, weights_dict):
+    """Weighted geometric mean of (1 + score) - 1 over the available pillars.
+
+    Weights are renormalized over non-NaN pillars, so a missing pillar doesn't
+    pull the composite toward zero. Returns NaN if no pillar is available.
+    """
+    available = {k: v for k, v in pillars_dict.items() if not pd.isna(v)}
+    total_w = sum(weights_dict[k] for k in available)
+    if not available or total_w == 0:
+        return float("nan")
     result = 1.0
-    for k, v in pillars_dict.items():
-        if pd.isna(v):
-            continue
-        result *= (1 + v) ** weights_dict[k]
+    for k, v in available.items():
+        result *= (1 + v) ** (weights_dict[k] / total_w)
     return result - 1
 
 
@@ -97,7 +104,10 @@ class CountryModel:
 
     def aggregate(self):
         self.internal_score = geometric_aggregate(self.pillar_scores, WEIGHTS)
-        self.sensitivity_results = sensitivity_test(self.pillar_scores, WEIGHTS)
+        if pd.isna(self.internal_score):
+            self.sensitivity_results = {}
+        else:
+            self.sensitivity_results = sensitivity_test(self.pillar_scores, WEIGHTS)
 
     def run(self):
         self.compute_pillars()

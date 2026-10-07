@@ -46,3 +46,19 @@ def quantile_regime(series):
             return 2
 
     return series.apply(map_value)
+
+
+def weighted_nanmean(df, weights, min_count=1):
+    """Row-wise weighted mean that renormalizes weights over the non-NaN columns.
+
+    Rows with fewer than ``min_count`` available columns are NaN.
+    """
+    weights_arr = np.array(weights, dtype=float)
+    values = df.values.astype(float)
+    mask = ~np.isnan(values)
+    weighted_sum = np.where(mask, values * weights_arr, 0.0).sum(axis=1)
+    weight_sum = (mask * weights_arr).sum(axis=1)
+    valid = (mask.sum(axis=1) >= min_count) & (weight_sum > 0)
+    out = np.full(len(df), np.nan)
+    out[valid] = weighted_sum[valid] / weight_sum[valid]
+    return pd.Series(out, index=df.index)

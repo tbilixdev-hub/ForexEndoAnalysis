@@ -2,7 +2,12 @@ import numpy as np
 import pandas as pd
 
 from config_.series_config import SERIES_CONFIG
-from core.standardization import rolling_zscore, smooth_compress, quantile_regime, REGIME_LABELS
+from core.standardization import (
+    rolling_zscore, smooth_compress, quantile_regime, weighted_nanmean, REGIME_LABELS,
+)
+
+# Annual series (e.g. fiscal-year deficit) can lag the latest month by up to ~2 years.
+MAX_FFILL_MONTHS = 24
 
 
 class FiscalPillar:
@@ -10,7 +15,7 @@ class FiscalPillar:
     def __init__(self, country, provider):
         self.country = country
         self.provider = provider
-        self.score = 0.0
+        self.score = float("nan")
         self.score_series = pd.Series(dtype=float)
         self.details = []
 
@@ -34,41 +39,49 @@ class FiscalPillar:
         }
         components = {}
 
-        for role in ["debt_gdp", "deficit_gdp", "interest_gdp"]:
-            if role not in role_to_indicator:
-                continue
-            try:
-                _, cfg = role_to_indicator[role]
-                raw = self.provider.get_series(self.country, cfg).resample("ME").ffill().dropna()
-                components[role] = -rolling_zscore(raw)
-            except Exception:
-                pass
+        def monthly(role):
+            _, cfg = role_to_indicator[role]
+            raw = self.provider.get_series(self.country, cfg)
+            return raw.resample("ME").last().ffill().dropna()
 
-        if "yield10" in role_to_indicator:
+        def add(name, fn):
             try:
-                _, cfg = role_to_indicator["yield10"]
-                raw = self.provider.get_series(self.country, cfg).resample("ME").last()
-                yield_6m_change = raw.diff(6).dropna()
-                components["yield10"] = -rolling_zscore(yield_6m_change)
-            except Exception:
-                pass
+                components[name] = fn()
+            except Exception as exc:
+                self.details.append({"status": "skipped", "reason": f"Failed {name}: {exc}"})
 
-        receipts_series = None
-        if "receipts" in role_to_indicator:
-            try:
-                _, receipts_cfg = role_to_indicator["receipts"]
-                receipts_series = self.provider.get_series(self.country, receipts_cfg).resample("ME").ffill()
-            except Exception:
-                pass
+        def has(*roles):
+            return all(r in role_to_indicator for r in roles)
 
-        if receipts_series is not None and "interest_gdp" in role_to_indicator:
+        # Higher debt/GDP is a negative.
+        if has("debt_gdp"):
+            add("debt_gdp", lambda: -rolling_zscore(monthly("debt_gdp")))
+
+        # Surplus(+)/deficit(-) as % of GDP: a larger balance is a positive.
+        if has("deficit_gdp"):
+            add("deficit_gdp", lambda: rolling_zscore(monthly("deficit_gdp")))
+
+        # Interest outlays and GDP are both nominal $ (SAAR), so their ratio is % of GDP.
+        interest_gdp = None
+        if has("interest", "gdp"):
             try:
-                _, interest_cfg = role_to_indicator["interest_gdp"]
-                interest_series = self.provider.get_series(self.country, interest_cfg).resample("ME").ffill()
-                liquidity_cover = (receipts_series / interest_series).dropna()
-                components["liquidity"] = rolling_zscore(liquidity_cover)
-            except Exception:
-                pass
+                interest = monthly("interest")
+                gdp = monthly("gdp")
+                interest_gdp = (interest / gdp.reindex(interest.index, method="ffill") * 100).dropna()
+                components["interest_gdp"] = -rolling_zscore(interest_gdp)
+            except Exception as exc:
+                self.details.append({"status": "skipped", "reason": f"Failed interest_gdp: {exc}"})
+
+        # Receipts (% of GDP) per unit of interest outlays (% of GDP): coverage ratio.
+        if interest_gdp is not None and has("receipts"):
+            def liquidity():
+                receipts = monthly("receipts")
+                aligned = receipts.reindex(interest_gdp.index.union(receipts.index)).ffill()
+                return rolling_zscore((aligned / interest_gdp).dropna())
+            add("liquidity", liquidity)
+
+        if has("yield10"):
+            add("yield10", lambda: -rolling_zscore(monthly("yield10").diff(6).dropna()))
 
         if len(components) < 2:
             self.details.append({
@@ -77,19 +90,16 @@ class FiscalPillar:
             })
             return float("nan")
 
-        component_df = pd.concat(components, axis=1).dropna()
-        if component_df.empty:
+        # Carry low-frequency (annual/quarterly) components forward so the composite
+        # isn't truncated to the date of the slowest series.
+        component_df = pd.concat(components, axis=1, sort=True).ffill(limit=MAX_FFILL_MONTHS)
+        weights = [component_weights.get(c, 0) for c in component_df.columns]
+        fiscal_raw = weighted_nanmean(component_df, weights, min_count=2).dropna()
+        if fiscal_raw.empty:
             self.details.append({"status": "skipped", "reason": "No overlapping fiscal observations"})
             return float("nan")
+        component_df = component_df.loc[fiscal_raw.index]
 
-        avail = list(component_df.columns)
-        total_w = sum(component_weights.get(c, 0) for c in avail)
-        if total_w == 0:
-            return float("nan")
-        fiscal_raw = sum(
-            (component_weights.get(c, 0) / total_w) * component_df[c]
-            for c in avail
-        )
         fiscal_score_series = smooth_compress(fiscal_raw)
         self.score_series = fiscal_score_series.dropna()
 

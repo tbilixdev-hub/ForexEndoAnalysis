@@ -10,7 +10,7 @@ class LaborPillar:
     def __init__(self, country, provider):
         self.country = country
         self.provider = provider
-        self.score = 0.0
+        self.score = float("nan")
         self.score_series = pd.Series(dtype=float)
         self.details = []
 
@@ -33,7 +33,7 @@ class LaborPillar:
                 continue
             name, cfg = role_to_indicator[role]
             try:
-                s = self.provider.get_series(self.country, cfg).dropna().astype(float)
+                s = self.provider.get_series(self.country, cfg).dropna().astype(float).resample("ME").last()
 
                 if role == "nfp":
                     derived = s.diff().rolling(3).mean()

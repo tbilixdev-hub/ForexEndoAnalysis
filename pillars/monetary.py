@@ -2,7 +2,12 @@ import numpy as np
 import pandas as pd
 
 from config_.series_config import SERIES_CONFIG
-from core.standardization import rolling_zscore, smooth_compress, quantile_regime, REGIME_LABELS
+from core.standardization import (
+    rolling_zscore, smooth_compress, quantile_regime, weighted_nanmean, REGIME_LABELS,
+)
+
+# Monthly components can lag one another by a release or two.
+MAX_FFILL_MONTHS = 3
 
 
 class MonetaryPillar:
@@ -10,7 +15,7 @@ class MonetaryPillar:
     def __init__(self, country, provider):
         self.country = country
         self.provider = provider
-        self.score = 0.0
+        self.score = float("nan")
         self.score_series = pd.Series(dtype=float)
         self.details = []
 
@@ -46,7 +51,9 @@ class MonetaryPillar:
                 _, assets_cfg = role_to_indicator["fed_assets"]
                 _, gdp_cfg = role_to_indicator["gdp"]
                 fed_assets_m = self.provider.get_series(self.country, assets_cfg).resample("ME").last()
-                gdp_monthly = self.provider.get_series(self.country, gdp_cfg).resample("ME").ffill()
+                gdp = self.provider.get_series(self.country, gdp_cfg).resample("ME").last().dropna()
+                # Carry the latest GDP print forward so the ratio runs to the latest assets month.
+                gdp_monthly = gdp.reindex(fed_assets_m.index, method="ffill")
                 bs_pct_gdp = fed_assets_m / gdp_monthly
                 bs_6m_change = bs_pct_gdp.pct_change(6, fill_method=None).dropna()
                 components["balance_sheet"] = rolling_zscore(bs_6m_change)
@@ -71,12 +78,14 @@ class MonetaryPillar:
             })
             return float("nan")
 
-        component_df = pd.concat(components, axis=1).dropna()
-        if component_df.empty:
+        component_df = pd.concat(components, axis=1, sort=True).ffill(limit=MAX_FFILL_MONTHS)
+        monetary_raw = weighted_nanmean(
+            component_df, [1.0] * len(component_df.columns), min_count=2
+        ).dropna()
+        if monetary_raw.empty:
             self.details.append({"status": "skipped", "reason": "No overlapping monetary observations"})
             return float("nan")
-
-        monetary_raw = component_df.mean(axis=1)
+        component_df = component_df.loc[monetary_raw.index]
         monetary_score_series = smooth_compress(monetary_raw)
         self.score_series = monetary_score_series.dropna()
 
